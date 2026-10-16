@@ -1,0 +1,5 @@
+{
+  "name": "Windows 通信桥只读验证",
+  "stage": "连通性验收",
+  "instructions": "这是用户授权的通信桥端到端验收，标记 CODEX-DSH-BRIDGE-SMOKE。只用本机只读命令确认 Windows 操作系统和当前时间（例如 PowerShell 的 [System.Environment]::OSVersion.VersionString 和 Get-Date -Format o）。不要访问业务仓库，不运行 Git，不修改文件。随后调用 bridge_report，summary 包含本标记、实际执行命令、真实输出和接收到的 task_id；确认确实在 Windows 执行后 outcome 为 passed，否则如实填 failed 或 blocked。commits 和 files 均为 []。"
+}
