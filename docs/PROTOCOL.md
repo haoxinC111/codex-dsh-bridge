@@ -21,9 +21,11 @@ python3 bridge.py query-status '查询ID'
 
 查询独立于模型任务队列，不启动目标模型。列表最多 50 项，先按标题/目录匹配，无结果时用 DSH 搜索补充。read 仅返回有界的用户/助手消息，含截断和分页标记；更早历史使用 `--before-seq N`。
 
-创建请求先保存固定 session ID 和权限选择，再由 Windows 验证目录并创建。默认 permission_preset=inherit，不改 DSH 权限；显式 --full-access 才选择 danger-full-access，核验 sandbox=danger-full-access、approval=never 后持久化。Mac 收到身份、权限选择匹配的回执才保存 connection。
+创建请求先保存固定 session ID 和权限选择，再由 Windows 验证目录。DSH 的 WorkspaceRegistry 按规范路径复用或登记工作区，再调用 `controller.create({sessionId, workspaceId})`；不能同时传 `cwd`。仅执行目录相同不会让会话进入侧栏工作区，不能按标题匹配同名目录。默认 permission_preset=inherit，不改 DSH 权限；显式 --full-access 才选择 danger-full-access，核验 sandbox=danger-full-access、approval=never 后持久化。Windows 在持久化后读回工作区成员，返回 `workspace_id`、`workspace_path`、`workspace_title`、`workspace_attached=true` 及规范 `cwd`。Mac 核对身份、权限选择和成员关系回执后才保存 connection；验证失败时保留原连接。
 
-创建要求协议 4，防止旧插件把默认创建当作 Full access。默认等待 20 秒，超时返回 waiting_for_windows 和查询 ID；应 query-status 等结果，不重复创建。失败返回 result.ok=false；若已创建但后续权限失败，先检查固定 ID，不自动额外建会话。
+只处理本次新建会话，不提供已有 Ungrouped 会话迁移。DSH 缺少工作区接口时在创建前明确失败，不回退为只传 cwd。
+
+创建要求协议 5：协议 4 只保证显式权限选择，不能保证工作区归类；更旧插件可能默认启用 Full access。默认等待 20 秒，超时返回 waiting_for_windows 和查询 ID；应 query-status 等结果，不重复创建。失败返回 result.ok=false；若已创建但后续权限或成员关系验证失败，先检查固定 ID，不自动额外建会话。
 
 ## 任务与附件
 
@@ -89,4 +91,10 @@ ACK 不撤回已入 Codex 队列的消息；每次收件仍需检查。重复结
 
 pause 停止派发新任务但允许结果上传；`pause --allow-task ID` 仅放行指定维护任务；resume 恢复。不要因升级而取消用户工作。
 
-`bundle --update` 生成私人更新包。默认升级是保存工作、完全退出 DSH、运行新 setup.ps1、正常重启。高级 update-when-idle.ps1 要求 Mac 已暂停且 Windows active/outbox 清空，只替换独立插件与 patch，不强杀应用；切换至 worker-v4.mjs 后仍需正常重启。必须验证 worker.protocol=4 和查询结果，不以复制成功代替加载成功。
+`bundle --update` 生成私人更新包。默认升级是保存工作、完全退出 DSH、运行新 setup.ps1、正常重启。高级 update-when-idle.ps1 要求 Mac 已暂停且 Windows active/outbox 清空，只替换独立插件与 patch，不强杀应用；切换至 worker-v5.mjs 后仍需正常重启。必须验证 worker.protocol=5 和查询结果，不以复制成功代替加载成功。
+
+升级前先等待已提交任务、控制查询和 Windows outbox 完成，再暂停派发；不要重复 init 或重新配对。更新 Mac 源码并重启相应桥服务，使服务端与 CLI 一致；然后生成 `bundle --update`，下载并校验新包，按上述方式更新 Windows 插件。协议 5 和查询验证通过后再 resume。通用 skill 的更新也须保留 installation.json 和个人修改；安装器遇到不同内容会停止，应核对并备份后迁移。
+
+创建请求在提交和领取时都检查协议。若排队后 Windows 插件降到旧版，创建请求保留在队首，等待协议 5 插件恢复；不会交给旧版创建未归类会话，也不会让后续控制查询越过它。
+
+升级验收：在用户指定目录新建唯一测试会话，核对工作区回执，发送一条已授权的最小测试消息，再检查侧栏分类。空会话可能暂不显示，不因未显示而重复创建。正常刷新；桌面版无刷新入口时，等其他任务结束后正常退出并重开，确认分类仍保留。不要为验收关闭网页认证或中断其他会话。

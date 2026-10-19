@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 
 export const name = 'codex-dsh-bridge';
-export const protocol = 4;
+export const protocol = 5;
 export const inject = ['sessionController', 'tools', 'agents', 'sessions', 'sessionPersistence', 'permissionPresets'];
 
 function text(value, label, max = 200) {
@@ -47,7 +47,10 @@ export function durableController(ctx) {
     if (actual.permission_preset !== preset || actual.sandbox !== preset || actual.approval !== 'never') throw new Error('Full access selection did not take effect');
     return actual;
   };
-  return { query: (query, signal) => querySessions(ctx.sessionController, query, signal, flush, fullAccess),
+  // Optional lookup keeps older hosts usable for existing chats; only creation
+  // requires workspace support. Cordis property access otherwise needs inject.
+  return { query: (query, signal) => querySessions(ctx.sessionController, query, signal, flush, fullAccess,
+    query.method === 'create' ? ctx.get('workspaceRegistry') : undefined),
     async prompt(request, signal) {
     const result = await ctx.sessionController.prompt(request, signal);
     await flush(request.sessionId);
@@ -55,7 +58,7 @@ export function durableController(ctx) {
   } };
 }
 
-export async function querySessions(controller, query, signal, flush, fullAccess) {
+export async function querySessions(controller, query, signal, flush, fullAccess, workspaceRegistry) {
   if (query.method === 'create') {
     const { workspace, session_id: sessionId } = query.params;
     const preset = query.params.permission_preset;
@@ -63,14 +66,27 @@ export async function querySessions(controller, query, signal, flush, fullAccess
     if (preset === 'danger-full-access' && typeof fullAccess !== 'function') throw new Error('Full access permission service unavailable');
     text(sessionId, 'new session ID');
     if (!path.isAbsolute(workspace) || !(await fsp.stat(workspace)).isDirectory()) throw new Error('Workspace must be an existing absolute directory');
+    if (typeof workspaceRegistry?.create !== 'function' || typeof workspaceRegistry?.get !== 'function') {
+      throw new Error('DSH workspace support is required; no session was created');
+    }
     signal.throwIfAborted();
-    const result = await controller.create({ sessionId, cwd: workspace });
+    // DSH resolves canonical paths and reuses an existing registration. cwd alone
+    // does not attach a session to the sidebar, and cannot accompany workspaceId.
+    const target = await workspaceRegistry.create(workspace);
+    signal.throwIfAborted();
+    const result = await controller.create({ sessionId, workspaceId: target.id });
     if (result.sessionId !== sessionId) throw new Error('Created session identity mismatch');
     signal.throwIfAborted();
     // Inherit means leave DSH's own defaults untouched; they may themselves be Full access.
     const permissions = preset === 'danger-full-access' ? await fullAccess(sessionId) : { permission_preset: 'inherit' };
     await flush(sessionId);
-    return { session_id: result.sessionId, cwd: workspace, created: true, ...permissions };
+    const registered = workspaceRegistry.get(target.id);
+    if (!registered || registered.path !== target.path || !registered.sessionIds.includes(sessionId)) {
+      throw new Error(`Workspace membership was not verified for session ${sessionId}; preserve this session ID`);
+    }
+    return { session_id: result.sessionId, cwd: registered.path, created: true, ...permissions,
+      workspace_id: registered.id, workspace_path: registered.path, workspace_title: registered.title,
+      workspace_attached: true };
   }
   // These APIs inspect persisted sessions without activating their models.
   const { items } = await controller.list({}, signal);

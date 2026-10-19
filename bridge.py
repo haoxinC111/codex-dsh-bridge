@@ -241,10 +241,10 @@ class Store:
             require_text(params['workspace'], 'workspace', 2000)
             if type(params.get('full_access', False)) is not bool:
                 raise BridgeError('full_access must be an explicit boolean')
-            if (self.worker_status().get('protocol') or 0) < 4:
-                raise BridgeError('Upgrade Windows bridge to protocol 4 before creating a session')
+            if (self.worker_status().get('protocol') or 0) < 5:
+                raise BridgeError('Upgrade Windows bridge to protocol 5 before creating a workspace session')
             # Persist the identity before any network request. A lost reply adopts the same session.
-            # Older workers always elevated new sessions, so inheritance requires protocol 4.
+            # Protocol 4 added permission choice; protocol 5 also verifies workspace membership.
             params = {'workspace': params['workspace'], 'session_id': 'session-' + str(uuid.uuid4()),
                       'permission_preset': 'danger-full-access' if params.get('full_access') else 'inherit'}
         else:
@@ -277,9 +277,13 @@ class Store:
         with self.connection() as db:
             return self.query_row(db.execute('SELECT * FROM queries WHERE id=?', (query_id,)).fetchone())
 
-    def next_query(self):
+    def next_query(self, protocol=5):
         with self.connection() as db:
             row = db.execute('SELECT * FROM queries WHERE result IS NULL ORDER BY seq LIMIT 1').fetchone()
+            # Recheck at delivery in case the worker was downgraded after enqueue.
+            # Keep query order: an old worker waits rather than creating an Ungrouped session.
+            if row and row['method'] == 'create' and protocol < 5:
+                return None
             return self.query_row(row) if row else None
 
     def finish_query(self, query_id, result):
@@ -302,6 +306,13 @@ class Store:
                         expected.update(sandbox='danger-full-access', approval='never')
                     if any(value.get(key) != val for key, val in expected.items()):
                         raise BridgeError('Requested creation permissions were not verified; connection unchanged')
+                    # A created session can still be Ungrouped. Bind only after
+                    # Windows has read back membership in its canonical workspace.
+                    if (value.get('workspace_attached') is not True
+                            or not isinstance(value.get('workspace_id'), str) or not value['workspace_id'].strip()
+                            or not isinstance(value.get('workspace_path'), str) or not ntpath.isabs(value['workspace_path'])
+                            or value.get('cwd') != value['workspace_path']):
+                        raise BridgeError('Workspace membership was not verified; connection unchanged')
                 db.execute('INSERT OR REPLACE INTO connections VALUES (?,?,?,?)',
                            (row['thread_id'], params['session_id'], encode(value), now()))
             # Read-only retries may observe newer session state. Keep the first returned snapshot.
@@ -508,12 +519,13 @@ def make_server(store, config):
                 if self.path == '/v1/pair':
                     result = store.bind(payload.get('session_id'))
                 elif self.path == '/v1/next':
-                    protocol = payload.get('protocol') if payload.get('protocol') in (2, 3, 4) else 1
+                    protocol = payload.get('protocol') if payload.get('protocol') in (2, 3, 4, 5) else 1
                     store.heartbeat(protocol)
                     result = {'task': store.next_task(protocol)}
                 elif self.path == '/v2/query/next':
-                    store.heartbeat(payload.get('protocol') if payload.get('protocol') in (3, 4) else 2)
-                    result = {'query': store.next_query()}
+                    protocol = payload.get('protocol') if payload.get('protocol') in (3, 4, 5) else 2
+                    store.heartbeat(protocol)
+                    result = {'query': store.next_query(protocol)}
                 elif self.path == '/v2/query/result':
                     result = store.finish_query(payload.get('id'), payload.get('result'))
                 elif self.path == '/v1/accepted':

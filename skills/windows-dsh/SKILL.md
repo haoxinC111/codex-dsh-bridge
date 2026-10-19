@@ -15,7 +15,7 @@ description: "通过已安装的 Tailscale 通信桥调度 Windows 桌面 DSH：
 python3 <启动器> status
 ```
 
-核对当前 `connection`、Windows worker 的 `protocol/seen_at`、`dispatch_pause`。查询和已有会话通信要求协议至少 2；发布版创建会话要求至少 4。设备须在同一个可互通的 Tailscale 网络，Windows DSH 与 Mac 服务在线。暂停派发时报告维护状态，不擅自 resume。无响应不是“没有会话”，先排查在线情况。
+核对当前 `connection`、Windows worker 的 `protocol/seen_at`、`dispatch_pause`。查询和已有会话通信要求协议至少 2；发布版创建会话要求至少 5。设备须在同一个可互通的 Tailscale 网络，Windows DSH 与 Mac 服务在线。暂停派发时报告维护状态，不擅自 resume。无响应不是“没有会话”，先排查在线情况。
 
 ## 选择或创建会话
 
@@ -35,6 +35,10 @@ python3 <启动器> create --workspace 'E:\project'
 默认 create 使用 `permission_preset=inherit`，不修改 DSH 的默认权限。继承并不保证沙箱开启：DSH 自身默认值也可能是 Full access。**仅当当前用户明确选择新会话开启 Full access 时，才加 `--full-access`**；之前在该用户授权范围内已选择的偏好可复用。不要把安装、只读测试或“自动执行”解读为权限升级授权。
 
 Full access 仅作用于此次新建会话。回执必须确认 `permission_preset=danger-full-access`、`sandbox=danger-full-access`、`approval=never`；默认创建则须确认 `permission_preset=inherit`。不修改已有会话或全局权限。权限或工具阻塞时如实报告，不自行绕过。
+
+创建时按目录的规范路径复用或登记工作区，使用真实 `workspaceId` 和已保存的固定 `sessionId`；不能同时传 `cwd`。回执须确认 `workspace_id`、`workspace_path`、`workspace_title` 和 `workspace_attached=true`，且 `cwd` 等于工作区路径。仅设置执行目录不等于归入侧栏工作区；不按同名标题猜测，不迁移已有 Ungrouped 会话。缺少接口或验证失败时报告错误，保留原 session ID，不改成新 ID 重建。
+
+升级验收还须在首条已授权测试消息后确认侧栏分类；空会话可能暂不显示。刷新后复查；没有刷新入口时，等其他任务结束后正常退出并重开。不要中断其他会话或关闭网页认证。
 
 控制命令默认等 20 秒，返回 `waiting_for_windows=true` 时保留查询 ID，之后用 `query-status ID` 查看。不要重复 create；桥已保存固定会话 ID。`result.ok=false` 是失败，先读错误。
 

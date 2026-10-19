@@ -46,9 +46,12 @@ try {
   const existing = permissionCtx.sessions.create('existing-user-session');
   const created = permissionCtx.sessions.create('session-full-access-fixture', { meta: { cwd: directory } });
   const inherited = permissionCtx.sessions.create('session-inherit-fixture', { meta: { cwd: directory } });
+  const workspace = { id: 'workspace-fixture', path: fs.realpathSync(directory), title: 'fixture', sessionIds: [created.id, inherited.id] };
+  permissionCtx.provide('workspaceRegistry', { create: async () => workspace, get: () => workspace });
   assert.equal(selectedPreset(created), 'workspace-write');
   const beforeInheritance = inherited.seq;
   const inheritController = durableController({
+    get: name => permissionCtx.get(name),
     sessionController: { create: async ({ sessionId }) => ({ sessionId }) },
     agents: { get: () => ({ session: inherited }) },
     permissionPresets: permissionCtx.permissionPresets,
@@ -61,6 +64,7 @@ try {
   assert.equal(inherited.seq, beforeInheritance, 'inherit must not append any permission-changing events');
   let flushes = 0;
   const controller = durableController({
+    get: name => permissionCtx.get(name),
     sessionController: { create: async ({ sessionId }) => ({ sessionId }) },
     agents: { get: () => ({ session: created }) },
     permissionPresets: permissionCtx.permissionPresets,

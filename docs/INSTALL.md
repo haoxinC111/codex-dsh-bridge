@@ -148,7 +148,7 @@ python3 bridge.py --state "$BRIDGE_STATE" status
 python3 bridge.py --state "$BRIDGE_STATE" sessions
 ```
 
-须看到已配对、Windows worker.protocol=4、seen_at 更新及可用的会话列表。状态无更新时先检查插件加载和配置，不能直接发送任务。
+须看到已配对、Windows worker.protocol=5、seen_at 更新及可用的会话列表。状态无更新时先检查插件加载和配置，不能直接发送任务。
 
 然后选择目标：
 
@@ -164,6 +164,8 @@ python3 bridge.py --state "$BRIDGE_STATE" create --workspace 'E:\project'
 # 只有明确选择 Full access 时才替换为：
 python3 bridge.py --state "$BRIDGE_STATE" create --workspace 'E:\project' --full-access
 ```
+
+创建会按规范路径复用或登记工作区；回执还须确认 `workspace_id`、`workspace_path`、`workspace_title`、`workspace_attached=true`，且 `cwd` 等于工作区路径。已有 Ungrouped 会话不迁移。
 
 create 超时只查 query-status，不重复建会话。默认回执应为 permission_preset=inherit；Full access 回执须同时确认 danger-full-access 与 approval=never。继承可能遇到工具审批，也可能继承 DSH 已有 Full access，不能隐瞒实际权限。
 
@@ -204,6 +206,8 @@ python3 bridge.py --state "$BRIDGE_STATE" receive '实际task_id'
 ```
 
 验收证据必须包含：Windows 实际执行、结果已保存、通知出现在发起的同一个 Codex 聊天、ACK 成功、最后 receive 返回 action=skip。仅主动读取并 ACK 可证明结果处理，但不能代替通知自动续作的验证。
+
+若本次新建了会话，还要在首条测试消息后核对它位于指定工作区分类下，并在刷新后再次确认。空会话可能暂不显示，不重复创建。桌面版没有刷新入口时，等其他任务结束后正常退出并重开 DSH；无需调整网页认证。
 
 ## 停止和卸载
 

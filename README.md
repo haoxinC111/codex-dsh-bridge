@@ -29,6 +29,12 @@
 
 **回传时机：** 原 Codex 聊天运行中，通知进入 Queue，等本轮结束后处理；聊天空闲时，通知触发后续轮次。当前没有接入自动 Steer。等待期间仍可主动查询结果。
 
+## 本次更新：新会话归入工作区
+
+新建会话会按目录的规范路径复用或登记 DSH 工作区，出现在对应分类下。仅新增会话使用该流程；已有 Ungrouped 会话不会自动迁移。默认仍继承权限，Full access 仍需显式选择。
+
+**已有安装须同时更新 Mac 代码和 Windows 插件到协议 5**，再按[升级说明](docs/PROTOCOL.md#维护与升级)核对加载状态；只更新 Mac 时，新建操作会提示先升级插件。
+
 ## 安装
 
 两种方式安装的是同一套工具，选择一种即可。
@@ -142,7 +148,7 @@ python3 bridge.py status
 python3 bridge.py sessions
 ```
 
-应看到已配对、`worker.protocol=4`、近期 `seen_at` 和可用的会话列表。接下来二选一：
+应看到已配对、`worker.protocol=5`、近期 `seen_at` 和可用的会话列表。接下来二选一：
 
 **A. 连接已有会话：** 先查标题，再读历史，最后连接核对后的 ID。
 
@@ -157,6 +163,8 @@ python3 bridge.py connect --session '<核对后的DSH会话ID>'
 ```sh
 python3 bridge.py create --workspace 'E:\project'
 ```
+
+目录须已存在；桥会复用该规范路径的工作区，未登记时新增工作区记录。创建回执须包含 `workspace_id`、`workspace_path`、`workspace_title` 和 `workspace_attached=true`。
 
 默认继承 DSH 权限。**只有明确选择 Full access 时**，才在 `create` 后追加 `--full-access`；它只影响此次新会话。创建超时后使用回执中的查询 ID 执行 `query-status`，不要重复创建。
 
@@ -220,9 +228,9 @@ BRIDGE_STATE="$HOME/.local/share/codex-dsh-bridge"
 | --- | --- |
 | Mac | Python 3.9+，无需 pip 依赖；服务与 Codex 使用相同系统用户及 Codex 数据目录 |
 | Codex | 桌面 CLI 支持 `queue --thread --message`；已实测版本 `0.162.0-alpha.17.2` |
-| Windows DSH | 需要 Desktop profile patch、SessionController、tools、会话持久化和权限预设接口；插件使用 DSH 内置 Node |
+| Windows DSH | 需要 Desktop profile patch、SessionController、tools、会话持久化、权限预设及 WorkspaceRegistry 接口；创建须支持 workspaceId，插件使用 DSH 内置 Node |
 | 网络与设备 | Tailscale 私网；当前面向单用户、单台 Windows，任务串行执行 |
-| 插件协议 | 本发布版为协议 4；新建会话要求协议 4，查询与连接已有会话要求 2+ |
+| 插件协议 | 本发布版为协议 5；新建会话要求协议 5，查询与连接已有会话要求 2+ |
 | 自动续作 | 已验证应用开启、原聊天已加载的情况；关闭应用、休眠或未加载聊天不保证及时处理 |
 | 文件传输 | Windows → Mac：最多 10 个附件，单个 8 MiB、总计 20 MiB，文件须在任务工作目录内 |
 | Mac → Windows | 支持任务文本；尚无独立文件上传接口，代码可继续通过 Git 同步 |

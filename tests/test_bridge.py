@@ -23,7 +23,7 @@ class StoreTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.store = self.b.Store(pathlib.Path(self.tmp.name))
         self.thread = 'original-codex-thread'
-        self.store.configure({'pair_id': 'console-win', 'thread_id': self.thread,
+        self.store.configure({'pair_id': 'codex-dsh', 'thread_id': self.thread,
                               'worker_ip': '100.64.0.2', 'host': '127.0.0.1',
                               'port': 18766, 'token': 'a' * 64, 'codex_cli': '/unused'})
         self.store.bind('dsh-session')
@@ -263,7 +263,7 @@ class StoreTests(unittest.TestCase):
         saved = self.store.get_task(task['id'])
         self.assertEqual(saved['notification'], 'pending')
         self.assertEqual(self.store.get_query(query['id'])['result']['value']['items'][0]['session_id'], 'discovered-session')
-        self.assertEqual(self.store.worker_status()['protocol'], 4)
+        self.assertEqual(self.store.worker_status()['protocol'], 5)
         artifact = saved['result']['artifacts'][0]
         self.assertEqual(pathlib.Path(artifact['path']).read_text(), 'actual cross-language artifact')
 
@@ -323,7 +323,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.store.pairing()['session_id'], 'dsh-session')
 
     def test_creation_uses_fixed_identity_and_connects_only_the_initiator(self):
-        self.store.heartbeat(4)
+        self.store.heartbeat(5)
         query = self.store.create_query('create', {'workspace': 'D:\\work', 'full_access': True}, 'codex-new')
         sid = query['params']['session_id']
         self.assertTrue(sid.startswith('session-'))
@@ -334,7 +334,8 @@ class StoreTests(unittest.TestCase):
             self.store.finish_query(query['id'], {'ok': True, 'value': {'session_id': sid, 'cwd': 'D:\\work'}})
         self.assertIsNone(self.store.connection_for('codex-new'))
         self.store.finish_query(query['id'], {'ok': True, 'value': {'session_id': sid, 'cwd': 'D:\\work',
-            'permission_preset': 'danger-full-access', 'sandbox': 'danger-full-access', 'approval': 'never'}})
+            'permission_preset': 'danger-full-access', 'sandbox': 'danger-full-access', 'approval': 'never',
+            'workspace_id': 'workspace-real', 'workspace_path': 'D:\\work', 'workspace_title': 'work', 'workspace_attached': True}})
         self.assertEqual(self.store.connection_for('codex-new')['session_id'], sid)
         self.assertIsNone(self.store.connection_for('codex-other'))
         connect = self.store.create_query('connect', {'session_id': 'old'}, 'codex-other')
@@ -343,13 +344,14 @@ class StoreTests(unittest.TestCase):
         self.assertIsNone(self.store.connection_for('codex-other'))
 
     def test_creation_refuses_old_worker_before_creating_a_remote_query(self):
-        self.store.heartbeat(3)
-        with self.assertRaisesRegex(self.b.BridgeError, 'protocol 4'):
-            self.store.create_query('create', {'workspace': 'D:\\work'}, 'codex-new')
+        for protocol in (2, 3, 4):
+            self.store.heartbeat(protocol)
+            with self.assertRaisesRegex(self.b.BridgeError, 'protocol 5'):
+                self.store.create_query('create', {'workspace': 'D:\\work'}, 'codex-new')
         self.assertIsNone(self.store.next_query())
 
     def test_creation_defaults_to_inherit_and_requires_matching_permission_receipt(self):
-        self.store.heartbeat(4)
+        self.store.heartbeat(5)
         query = self.store.create_query('create', {'workspace': 'D:\\work'}, 'codex-new')
         sid = query['params']['session_id']
         self.assertEqual(query['params']['permission_preset'], 'inherit')
@@ -358,24 +360,62 @@ class StoreTests(unittest.TestCase):
                 'session_id': sid, 'permission_preset': 'danger-full-access'}})
         self.assertIsNone(self.store.connection_for('codex-new'))
         self.store.finish_query(query['id'], {'ok': True, 'value': {
-            'session_id': sid, 'permission_preset': 'inherit'}})
+            'session_id': sid, 'permission_preset': 'inherit', 'cwd': 'D:\\work',
+            'workspace_id': 'workspace-real', 'workspace_path': 'D:\\work', 'workspace_title': 'work', 'workspace_attached': True}})
         self.assertEqual(self.store.connection_for('codex-new')['session_id'], sid)
 
+    def test_http_old_worker_cannot_claim_creation_queued_before_a_downgrade(self):
+        self.store.heartbeat(5)
+        discovery = self.store.create_query('sessions', {'search': 'fixture'}, self.thread)
+        creation = self.store.create_query('create', {'workspace': 'D:\\work'}, self.thread)
+        config = {**self.store.config(), 'worker_ip': '127.0.0.1', 'port': 0}
+        server = self.b.make_server(self.store, config)
+        self.addCleanup(server.server_close)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.shutdown)
+        def poll(protocol):
+            request = urllib.request.Request('http://127.0.0.1:%d/v2/query/next' % server.server_address[1],
+                data=json.dumps({'protocol': protocol}).encode(),
+                headers={'Authorization': 'Bearer ' + config['token'], 'Content-Type': 'application/json'})
+            with urllib.request.urlopen(request) as response:
+                return json.load(response)['query']
+        self.assertEqual(poll(4)['id'], discovery['id'])
+        self.store.finish_query(discovery['id'], {'ok': True, 'value': {'items': []}})
+        for protocol in (2, 3, 4):
+            self.assertIsNone(poll(protocol))
+        self.assertEqual(poll(5)['id'], creation['id'])
+
     def test_creation_rejects_non_boolean_full_access_before_persisting(self):
-        self.store.heartbeat(4)
+        self.store.heartbeat(5)
         for choice in ('false', 'true', 1, None):
             with self.assertRaises(self.b.BridgeError):
                 self.store.create_query('create', {'workspace': 'D:\\work', 'full_access': choice}, self.thread)
         self.assertIsNone(self.store.next_query())
 
     def test_create_cli_only_selects_full_access_with_explicit_flag(self):
-        self.store.heartbeat(4)
+        self.store.heartbeat(5)
         for flags, expected in (([], 'inherit'), (['--full-access'], 'danger-full-access')):
             run = subprocess.run([os.sys.executable, str(ROOT / 'bridge.py'), '--state', str(self.store.root),
                                   'create', '--workspace', 'D:\\work', '--wait', '0', *flags],
                                  env={**os.environ, 'CODEX_THREAD_ID': self.thread}, capture_output=True, text=True)
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertEqual(json.loads(run.stdout)['params']['permission_preset'], expected)
+
+    def test_unverified_workspace_creation_preserves_existing_connection(self):
+        self.store.heartbeat(5)
+        old = self.store.create_query('connect', {'session_id': 'old'}, 'codex-new')
+        self.store.finish_query(old['id'], {'ok': True, 'value': {'session_id': 'old'}})
+        for full_access in (False, True):
+            query = self.store.create_query('create', {'workspace': 'D:\\work', 'full_access': full_access}, 'codex-new')
+            value = {'session_id': query['params']['session_id'], 'cwd': 'D:\\work',
+                     'permission_preset': query['params']['permission_preset']}
+            if full_access:
+                value.update(sandbox='danger-full-access', approval='never')
+            for fields in ({}, {'workspace_id': 'ws', 'workspace_path': 'D:\\work', 'workspace_attached': False},
+                           {'workspace_id': 'ws', 'workspace_path': 'D:\\other', 'workspace_attached': True}):
+                with self.assertRaisesRegex(self.b.BridgeError, 'Workspace'):
+                    self.store.finish_query(query['id'], {'ok': True, 'value': {**value, **fields}})
+                self.assertEqual(self.store.connection_for('codex-new')['session_id'], 'old')
 
     def test_upgrade_pause_allows_only_the_upgrade_task_to_be_claimed(self):
         upgrade, after = self.submit(), self.submit()

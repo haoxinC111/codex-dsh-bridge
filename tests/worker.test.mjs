@@ -158,17 +158,27 @@ test('new session creation sets Full access before flushing and acknowledging it
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-create-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const calls = [];
+  const workspace = { id: 'workspace-real', path: fs.realpathSync(dir), title: 'project', sessionIds: [] };
+  const registry = {
+    create: async value => { assert.equal(value, dir); return workspace; },
+    get: id => { assert.equal(id, workspace.id); return workspace; },
+  };
   const controller = { create: async request => { calls.push(request); return { sessionId: request.sessionId }; } };
   const flushes = [];
   const permission = { permission_preset: 'danger-full-access', sandbox: 'danger-full-access', approval: 'never' };
   const query = { method: 'create', params: { workspace: dir, session_id: 'session-fixed', permission_preset: 'danger-full-access' } };
   const result = await module.querySessions(controller, query, new AbortController().signal,
-    async id => { assert.deepEqual(flushes, ['permissions:session-fixed']); flushes.push(id); },
-    async id => { assert.equal(calls.length, 1); flushes.push('permissions:' + id); return permission; });
+    async id => { assert.deepEqual(flushes, ['permissions:session-fixed']); flushes.push(id); workspace.sessionIds.push(id); },
+    async id => { assert.equal(calls.length, 1); flushes.push('permissions:' + id); return permission; }, registry);
   assert.equal(result.session_id, 'session-fixed');
   assert.equal(result.permission_preset, 'danger-full-access');
   assert.equal(result.approval, 'never');
-  assert.deepEqual(calls, [{ cwd: dir, sessionId: 'session-fixed' }]);
+  assert.deepEqual(calls, [{ workspaceId: workspace.id, sessionId: 'session-fixed' }]);
+  assert.equal(result.workspace_id, workspace.id);
+  assert.equal(result.workspace_path, workspace.path);
+  assert.equal(result.workspace_title, 'project');
+  assert.equal(result.workspace_attached, true);
+  assert.equal(result.cwd, workspace.path);
   assert.deepEqual(flushes, ['permissions:session-fixed', 'session-fixed']);
   await assert.rejects(module.querySessions(controller, { ...query, params: { ...query.params, workspace: path.join(dir, 'missing') } }, new AbortController().signal, async () => {}, async () => permission), /ENOENT/);
   assert.equal(calls.length, 1);
@@ -178,8 +188,10 @@ test('Full access selection uses the session-local service and fails when the co
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-permission-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const session = { events: [] }, order = [];
+  const workspace = { id: 'workspace-real', path: fs.realpathSync(dir), title: 'project', sessionIds: ['session-fixed'] };
   let approval = 'never';
   const controller = module.durableController({
+    get: name => name === 'workspaceRegistry' ? { create: async () => workspace, get: () => workspace } : undefined,
     sessionController: { create: async ({ sessionId }) => ({ sessionId }) },
     agents: { get: () => ({ session }) },
     permissionPresets: {
@@ -223,14 +235,22 @@ test('inherit creation never calls the permission setter and persists before ret
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-inherit-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const calls = [];
-  const controller = { create: async request => { calls.push('create'); return { sessionId: request.sessionId }; } };
+  const workspace = { id: 'workspace-inherit', path: fs.realpathSync(dir), title: 'project', sessionIds: [] };
+  const controller = { create: async request => {
+    assert.deepEqual(request, { sessionId: 'session-inherit', workspaceId: workspace.id });
+    calls.push('create'); return { sessionId: request.sessionId };
+  } };
   const query = { method: 'create', params: { workspace: dir, session_id: 'session-inherit', permission_preset: 'inherit' } };
   const result = await module.querySessions(controller, query, new AbortController().signal,
-    async () => { calls.push('flush'); }, () => { throw new Error('must not change permissions'); });
+    async () => { calls.push('flush'); workspace.sessionIds.push('session-inherit'); },
+    () => { throw new Error('must not change permissions'); },
+    { create: async () => workspace, get: () => workspace });
   assert.deepEqual(calls, ['create', 'flush']);
   assert.equal(result.permission_preset, 'inherit');
   assert.equal(result.session_id, 'session-inherit');
   assert.equal(result.approval, undefined);
+  assert.equal(result.workspace_attached, true);
+  assert.equal(result.workspace_id, workspace.id);
 });
 
 test('unknown or missing creation permission fails before creating a session', async t => {
@@ -244,5 +264,29 @@ test('unknown or missing creation permission fails before creating a session', a
     }, new AbortController().signal, async () => {}), /permission/i);
   }
   assert.equal(created, 0);
-  assert.equal(module.protocol, 4);
+  assert.equal(module.protocol, 5);
+});
+
+test('creation refuses unsupported workspaces before creating any session', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-workspace-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  let creates = 0;
+  const controller = { create: async ({ sessionId }) => { creates++; return { sessionId }; } };
+  for (const permission_preset of ['inherit', 'danger-full-access']) {
+    const query = { method: 'create', params: { workspace: dir, session_id: 'fixed', permission_preset } };
+    await assert.rejects(module.querySessions(controller, query, new AbortController().signal, async () => {}, async () => ({})), /workspace.*support/i);
+  }
+  assert.equal(creates, 0);
+});
+
+test('creation cannot report success when workspace membership is missing after flush', async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-workspace-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const workspace = { id: 'workspace-real', path: fs.realpathSync(dir), title: 'project', sessionIds: [] };
+  const controller = { create: async ({ sessionId }) => ({ sessionId }) };
+  for (const permission_preset of ['inherit', 'danger-full-access']) {
+    const query = { method: 'create', params: { workspace: dir, session_id: 'fixed', permission_preset } };
+    await assert.rejects(module.querySessions(controller, query, new AbortController().signal, async () => {}, async () => ({}),
+      { create: async () => workspace, get: () => workspace }), /workspace.*membership/i);
+  }
 });

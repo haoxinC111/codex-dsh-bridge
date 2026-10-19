@@ -25,7 +25,7 @@ if (-not $idle) { throw 'Bridge did not become idle within 120 seconds. Nothing 
 $original = [IO.File]::ReadAllText($patch)
 $pattern = '(?ms)^# BEGIN CODEX-DSH-BRIDGE\r?\n.*?^# END CODEX-DSH-BRIDGE\r?\n?'
 if ([regex]::Matches($original, $pattern).Count -ne 1) { throw 'Expected one bridge block; original patch preserved.' }
-$target = Join-Path $bridgeDir 'worker-v4.mjs'
+$target = Join-Path $bridgeDir 'worker-v5.mjs'
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'worker.mjs') -Destination $target -Force
 $modulePath = $target.Replace('\', '/') | ConvertTo-Json -Compress
 $block = "# BEGIN CODEX-DSH-BRIDGE`r`n- insert:`r`n    - id: codex-dsh-bridge`r`n      name: $modulePath`r`n# END CODEX-DSH-BRIDGE`r`n"
@@ -34,4 +34,4 @@ Copy-Item -LiteralPath $patch -Destination ($patch + '.bridge-backup-' + [DateTi
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 [IO.File]::WriteAllText(($patch + '.bridge-tmp'), $updated, $utf8)
 Move-Item -LiteralPath ($patch + '.bridge-tmp') -Destination $patch -Force
-Write-Host 'Bridge protocol 4 installed. Desktop needs a normal DSH restart. No process was killed.'
+Write-Host 'Bridge protocol 5 installed. Desktop needs a normal DSH restart. No process was killed.'
